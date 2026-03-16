@@ -14,12 +14,12 @@ cargo install --path .
 
 ```bash
 # Add tasks
-crabban add "Build the thing" --project mycel --points 5
+crabban add "Build the thing" --project myproject --points 5
 crabban add "Fix the other thing" --project crabban --desc "It's broken" --points 2
 
 # See your board
 crabban show
-crabban show --project mycel
+crabban show --project myproject
 crabban show --status sprint
 
 # Move tasks through the pipeline
