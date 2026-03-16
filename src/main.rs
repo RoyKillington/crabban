@@ -177,6 +177,19 @@ impl Board {
         self.save();
     }
 
+    // remove all done tasks
+    fn clean(&mut self) {
+        let before = self.tasks.len();
+        self.tasks.retain(|task| task.status != Status::Done);
+        let removed = before - self.tasks.len();
+        if removed > 0 {
+            println!("Cleaned {} done task(s)", removed);
+            self.save();
+        } else {
+            println!("No done tasks to clean");
+        }
+    }
+
     // mark task as done quickly
     fn done_task(&mut self, uid: u32) {
         let found = self.tasks.iter_mut().find(|task| task.uid == uid);
@@ -399,6 +412,7 @@ enum Commands {
         #[arg(long)]
         status: Option<String>,
     },
+    Clean,
 }
 
 fn main() {
@@ -436,6 +450,9 @@ fn main() {
         Commands::Show { project, status } => {
             let status_filter = status.as_deref().and_then(Status::from_str);
             board.show(project.as_deref(), status_filter);
+        }
+        Commands::Clean => {
+            board.clean();
         }
     }
 }
