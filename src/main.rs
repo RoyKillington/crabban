@@ -327,7 +327,7 @@ impl Board {
                     .map(|t| t.display_string().len())
                     .max()
                     .unwrap_or(20);
-                let col_width: usize = longest_string;
+                let col_width: usize = longest_string + 4;
                 print!("{}", format!("{:<w$}", "BACKLOG", w = col_width).blue());
                 print!("{}", format!("{:<w$}", "ON DECK", w = col_width).yellow());
                 print!("{}", format!("{:<w$}", "SPRINT", w = col_width).green());
@@ -356,10 +356,11 @@ impl Board {
     }
 
     fn format_cell(task: Option<&&Task>, width: usize) -> String {
-        match task {
+        let content = match task {
             Some(t) => format!("  {}", t.display_string()),
-            None => format!("{:<width$}", "", width = width),
-        }
+            None => String::new(),
+        };
+        format!("{:<width$}", content, width = width)
     }
 
     fn view_task(&self, uid: u32) {
