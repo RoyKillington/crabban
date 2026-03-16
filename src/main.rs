@@ -14,6 +14,10 @@ struct Task {
     status: Status,
     story_points: Option<u8>,
     created_at: String,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    elapsed_secs: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -54,8 +58,51 @@ impl Task {
             status,
             story_points,
             created_at: String::from(created_at),
+            started_at: None,
+            elapsed_secs: 0,
         }
     }
+
+    fn display_string(&self) -> String {
+        let base = format!(
+            "[{}] {} - {} ({}pts)",
+            self.uid,
+            self.name,
+            self.project,
+            self.story_points.unwrap_or(0)
+        );
+        let total = compute_total_secs(self);
+        if total > 0 {
+            format!("{} [{}]", base, format_duration(total))
+        } else {
+            base
+        }
+    }
+}
+
+// --- TIME HELPERS --- //
+fn format_duration(secs: u64) -> String {
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+fn compute_total_secs(task: &Task) -> u64 {
+    let mut total = task.elapsed_secs;
+    if let Some(ref started) = task.started_at {
+        if let Ok(start_time) = started.parse::<chrono::DateTime<Local>>() {
+            let delta = Local::now() - start_time;
+            total += delta.num_seconds().max(0) as u64;
+        }
+    }
+    total
 }
 
 // --- BOARD --- //
@@ -120,22 +167,97 @@ impl Board {
         match index {
             Some(i) => {
                 self.tasks.remove(i);
-                self.save();
-                println!("Deleted task {}", uid)
+                println!("Deleted task {}", uid);
             }
             None => {
-                println!("No task with uid {}", uid)
+                println!("No task with uid {}", uid);
+                return;
             }
         }
+        self.save();
     }
 
     // mark task as done quickly
     fn done_task(&mut self, uid: u32) {
         let found = self.tasks.iter_mut().find(|task| task.uid == uid);
         match found {
-            Some(task) => task.status = Status::Done,
+            Some(task) => {
+                task.status = Status::Done;
+                // finalize timer if running
+                if let Some(ref started) = task.started_at {
+                    if let Ok(start_time) = started.parse::<chrono::DateTime<Local>>() {
+                        let delta = (Local::now() - start_time).num_seconds().max(0) as u64;
+                        task.elapsed_secs += delta;
+                    }
+                    task.started_at = None;
+                }
+                let total = task.elapsed_secs;
+                if total > 0 {
+                    println!(
+                        "Task {} done. Total time: {}",
+                        uid,
+                        format_duration(total)
+                    );
+                } else {
+                    println!("Task {} done.", uid);
+                }
+            }
             None => {
-                println!("No task with uid {}", uid)
+                println!("No task with uid {}", uid);
+                return;
+            }
+        }
+        self.save();
+    }
+
+    // start timer on a task
+    fn start_task(&mut self, uid: u32) {
+        let found = self.tasks.iter_mut().find(|task| task.uid == uid);
+        match found {
+            Some(task) => {
+                if task.started_at.is_some() {
+                    println!("Timer already running on task {}", uid);
+                    return;
+                }
+                task.started_at = Some(Local::now().to_string());
+                println!("Started timer on task {}: {}", uid, task.name);
+            }
+            None => {
+                println!("No task with uid {}", uid);
+                return;
+            }
+        }
+        self.save();
+    }
+
+    // pause timer on a task
+    fn pause_task(&mut self, uid: u32) {
+        let found = self.tasks.iter_mut().find(|task| task.uid == uid);
+        match found {
+            Some(task) => {
+                if task.started_at.is_none() {
+                    println!("Timer is not running on task {}", uid);
+                    return;
+                }
+                let start_time = task
+                    .started_at
+                    .as_ref()
+                    .unwrap()
+                    .parse::<chrono::DateTime<Local>>()
+                    .expect("Could not parse start time");
+                let delta = (Local::now() - start_time).num_seconds().max(0) as u64;
+                task.elapsed_secs += delta;
+                task.started_at = None;
+                println!(
+                    "Paused timer on task {}: {} (total: {})",
+                    uid,
+                    task.name,
+                    format_duration(task.elapsed_secs)
+                );
+            }
+            None => {
+                println!("No task with uid {}", uid);
+                return;
             }
         }
         self.save();
@@ -147,7 +269,8 @@ impl Board {
         match found {
             Some(task) => task.status = status,
             None => {
-                println!("No task with uid {}", uid)
+                println!("No task with uid {}", uid);
+                return;
             }
         }
         self.save();
@@ -188,16 +311,7 @@ impl Board {
                 let longest_string = self
                     .tasks
                     .iter()
-                    .map(|t| {
-                        format!(
-                            "[{}] {} - {} ({}pts)",
-                            t.uid,
-                            t.name,
-                            t.project,
-                            t.story_points.unwrap_or(0)
-                        )
-                        .len()
-                    })
+                    .map(|t| t.display_string().len())
                     .max()
                     .unwrap_or(20);
                 let col_width: usize = longest_string;
@@ -224,31 +338,14 @@ impl Board {
                     None => true,
                 }
         }) {
-            println!(
-                "  [{}] {} - {} ({}pts)",
-                task.uid,
-                task.name,
-                task.project,
-                task.story_points.unwrap_or(0)
-            )
+            println!("  {}", task.display_string())
         }
     }
 
     fn format_cell(task: Option<&&Task>, width: usize) -> String {
         match task {
-            Some(t) => {
-                let task = *t;
-                format!(
-                    "  [{}] {} - {} ({}pts)",
-                    task.uid,
-                    task.name,
-                    task.project,
-                    task.story_points.unwrap_or(0)
-                )
-            }
-            None => {
-                format!("{:<width$}", "", width = width)
-            }
+            Some(t) => format!("  {}", t.display_string()),
+            None => format!("{:<width$}", "", width = width),
         }
     }
 
@@ -286,6 +383,12 @@ enum Commands {
     Done {
         uid: u32,
     },
+    Start {
+        uid: u32,
+    },
+    Pause {
+        uid: u32,
+    },
     Move {
         uid: u32,
         status: String,
@@ -319,6 +422,12 @@ fn main() {
         }
         Commands::Done { uid } => {
             board.done_task(uid);
+        }
+        Commands::Start { uid } => {
+            board.start_task(uid);
+        }
+        Commands::Pause { uid } => {
+            board.pause_task(uid);
         }
         Commands::Move { uid, status } => {
             let status = Status::from_str(&status).expect("Invalid status");
@@ -427,5 +536,134 @@ mod tests {
         );
         board.move_task(2, Status::Sprint);
         assert_eq!(board.tasks[0].status, Status::Backlog);
+    }
+
+    // --- Time tracking tests --- //
+
+    #[test]
+    fn test_format_duration() {
+        assert_eq!(format_duration(0), "0s");
+        assert_eq!(format_duration(45), "45s");
+        assert_eq!(format_duration(125), "2m 5s");
+        assert_eq!(format_duration(3661), "1h 1m 1s");
+        assert_eq!(format_duration(7200), "2h 0m 0s");
+    }
+
+    #[test]
+    fn test_start_task() {
+        let path = std::env::temp_dir().join("crabban_test_start.json");
+        let mut board = Board {
+            tasks: Vec::new(),
+            next_uid: 1,
+            path,
+        };
+        board.add_task("Timer Task", None, "test", None);
+        board.start_task(1);
+        assert!(board.tasks[0].started_at.is_some());
+        assert_eq!(board.tasks[0].elapsed_secs, 0);
+    }
+
+    #[test]
+    fn test_start_already_started() {
+        let path = std::env::temp_dir().join("crabban_test_start_twice.json");
+        let mut board = Board {
+            tasks: Vec::new(),
+            next_uid: 1,
+            path,
+        };
+        board.add_task("Timer Task", None, "test", None);
+        board.start_task(1);
+        let original_started = board.tasks[0].started_at.clone();
+        board.start_task(1); // should be a no-op
+        assert_eq!(board.tasks[0].started_at, original_started);
+    }
+
+    #[test]
+    fn test_pause_task() {
+        let path = std::env::temp_dir().join("crabban_test_pause.json");
+        let mut board = Board {
+            tasks: Vec::new(),
+            next_uid: 1,
+            path,
+        };
+        board.add_task("Timer Task", None, "test", None);
+        // manually set started_at to 60 seconds ago to avoid sleeping
+        let past = (Local::now() - chrono::Duration::seconds(60)).to_string();
+        board.tasks[0].started_at = Some(past);
+        board.pause_task(1);
+        assert!(board.tasks[0].started_at.is_none());
+        // should be approximately 60 seconds (allow some tolerance)
+        assert!(board.tasks[0].elapsed_secs >= 59);
+        assert!(board.tasks[0].elapsed_secs <= 62);
+    }
+
+    #[test]
+    fn test_pause_not_started() {
+        let path = std::env::temp_dir().join("crabban_test_pause_none.json");
+        let mut board = Board {
+            tasks: Vec::new(),
+            next_uid: 1,
+            path,
+        };
+        board.add_task("Timer Task", None, "test", None);
+        board.pause_task(1); // should be a no-op
+        assert!(board.tasks[0].started_at.is_none());
+        assert_eq!(board.tasks[0].elapsed_secs, 0);
+    }
+
+    #[test]
+    fn test_done_with_timer() {
+        let path = std::env::temp_dir().join("crabban_test_done_timer.json");
+        let mut board = Board {
+            tasks: Vec::new(),
+            next_uid: 1,
+            path,
+        };
+        board.add_task("Timer Task", None, "test", None);
+        // simulate 120 seconds of prior work + a running timer started 30s ago
+        board.tasks[0].elapsed_secs = 120;
+        let past = (Local::now() - chrono::Duration::seconds(30)).to_string();
+        board.tasks[0].started_at = Some(past);
+        board.done_task(1);
+        assert_eq!(board.tasks[0].status, Status::Done);
+        assert!(board.tasks[0].started_at.is_none());
+        // should be approximately 150 seconds
+        assert!(board.tasks[0].elapsed_secs >= 149);
+        assert!(board.tasks[0].elapsed_secs <= 152);
+    }
+
+    #[test]
+    fn test_done_without_timer() {
+        let path = std::env::temp_dir().join("crabban_test_done_no_timer.json");
+        let mut board = Board {
+            tasks: Vec::new(),
+            next_uid: 1,
+            path,
+        };
+        board.add_task("Plain Task", None, "test", None);
+        board.done_task(1);
+        assert_eq!(board.tasks[0].status, Status::Done);
+        assert_eq!(board.tasks[0].elapsed_secs, 0);
+        assert!(board.tasks[0].started_at.is_none());
+    }
+
+    #[test]
+    fn test_backwards_compat_deserialize() {
+        // JSON without the new time-tracking fields — simulates an old board.json
+        let json = r#"{
+            "tasks": [{
+                "uid": 1,
+                "name": "Old Task",
+                "description": null,
+                "project": "legacy",
+                "status": "Backlog",
+                "story_points": null,
+                "created_at": "2025-01-01"
+            }],
+            "next_uid": 2
+        }"#;
+        let board: Board = serde_json::from_str(json).unwrap();
+        assert_eq!(board.tasks[0].elapsed_secs, 0);
+        assert!(board.tasks[0].started_at.is_none());
     }
 }
