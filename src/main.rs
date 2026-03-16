@@ -362,6 +362,52 @@ impl Board {
         }
     }
 
+    fn view_task(&self, uid: u32) {
+        let found = self.tasks.iter().find(|task| task.uid == uid);
+        match found {
+            Some(task) => {
+                let status_str = match task.status {
+                    Status::Backlog => "Backlog",
+                    Status::OnDeck => "On Deck",
+                    Status::Sprint => "Sprint",
+                    Status::Done => "Done",
+                };
+                let desc = task
+                    .description
+                    .as_deref()
+                    .unwrap_or("—");
+                let points = task
+                    .story_points
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "—".to_string());
+                let total = compute_total_secs(task);
+                let time = if total > 0 {
+                    format_duration(total)
+                } else {
+                    "—".to_string()
+                };
+                let timer = if task.started_at.is_some() {
+                    "running"
+                } else {
+                    "paused"
+                };
+
+                println!("  UID:          {}", task.uid);
+                println!("  Name:         {}", task.name);
+                println!("  Description:  {}", desc);
+                println!("  Project:      {}", task.project);
+                println!("  Status:       {}", status_str);
+                println!("  Points:       {}", points);
+                println!("  Created:      {}", task.created_at);
+                println!("  Time:         {}", time);
+                println!("  Timer:        {}", timer);
+            }
+            None => {
+                println!("No task with uid {}", uid);
+            }
+        }
+    }
+
     fn status_header(status: &Status) -> ColoredString {
         match status {
             Status::Backlog => "BACKLOG".blue(),
@@ -412,6 +458,9 @@ enum Commands {
         #[arg(long)]
         status: Option<String>,
     },
+    View {
+        uid: u32,
+    },
     Clean,
 }
 
@@ -450,6 +499,9 @@ fn main() {
         Commands::Show { project, status } => {
             let status_filter = status.as_deref().and_then(Status::from_str);
             board.show(project.as_deref(), status_filter);
+        }
+        Commands::View { uid } => {
+            board.view_task(uid);
         }
         Commands::Clean => {
             board.clean();
@@ -662,6 +714,21 @@ mod tests {
         assert_eq!(board.tasks[0].status, Status::Done);
         assert_eq!(board.tasks[0].elapsed_secs, 0);
         assert!(board.tasks[0].started_at.is_none());
+    }
+
+    #[test]
+    fn test_view_task() {
+        let path = std::env::temp_dir().join("crabban_test_view.json");
+        let mut board = Board {
+            tasks: Vec::new(),
+            next_uid: 1,
+            path,
+        };
+        board.add_task("View Me", Some("A detailed description"), "demo", Some(5));
+        // should not panic
+        board.view_task(1);
+        // nonexistent task should not panic either
+        board.view_task(999);
     }
 
     #[test]
